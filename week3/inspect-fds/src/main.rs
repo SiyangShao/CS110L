@@ -1,5 +1,7 @@
 use std::env;
 
+use crate::ps_utils::get_target;
+
 mod open_file;
 mod process;
 mod ps_utils;
@@ -12,9 +14,27 @@ fn main() {
     }
     #[allow(unused)] // TODO: delete this line for Milestone 1
     let target = &args[1];
-
     // TODO: Milestone 1: Get the target Process using psutils::get_target()
-    unimplemented!();
+    // unimplemented!();
+    let process = get_target(target).expect("Err occurs when calling get_target");
+    match process {
+        Some(pro) => {
+            pro.print();
+            for child in ps_utils::get_child_processes(pro.pid)
+                .expect("failed to get child processes")
+                .iter()
+            {
+                child.print();
+            }
+        }
+        None => {
+            println!(
+                "Target \"{}\" did not match any running PIDs or executables",
+                target
+            );
+            std::process::exit(1);
+        }
+    }
 }
 
 #[cfg(test)]
