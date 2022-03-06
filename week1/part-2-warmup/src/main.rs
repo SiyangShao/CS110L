@@ -1,7 +1,7 @@
 /* The following exercises were borrowed from Will Crichton's CS 242 Rust lab. */
 
 use std::collections::{HashSet, HashMap};
-
+// test2
 fn main() {
     println!("Hi! Try running \"cargo test\" to run tests.");
 }
