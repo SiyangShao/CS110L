@@ -1,3 +1,3 @@
 ## CS110L Learning
-Or rust learning..
+Or rust learning...
 
