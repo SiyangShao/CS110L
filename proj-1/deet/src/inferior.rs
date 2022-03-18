@@ -43,11 +43,11 @@ impl Inferior {
         // None
         let mut cmd = Command::new(target);
         cmd.args(args);
-        unsafe{
+        unsafe {
             cmd.pre_exec(child_traceme);
         }
         let child = cmd.spawn().ok()?;
-        Some(Inferior { child:child })
+        Some(Inferior { child: child })
     }
 
     /// Returns the pid of this inferior.
@@ -67,6 +67,15 @@ impl Inferior {
             }
             other => panic!("waitpid returned unexpected status: {:?}", other),
         })
+    }
+    pub fn kill(&mut self) {
+        match self.child.kill() {
+            Ok(_) => {
+                self.wait(None).unwrap();
+                println!("Killing running inferior (pid {})", self.pid());
+            }
+            Err(_) => {}
+        }
     }
     pub fn _continue(&mut self, signal: Option<signal::Signal>) -> Result<Status, nix::Error> {
         ptrace::cont(self.pid(), signal)?;

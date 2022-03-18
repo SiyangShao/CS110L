@@ -32,6 +32,13 @@ impl Debugger {
         loop {
             match self.get_next_command() {
                 DebuggerCommand::Run(args) => {
+                    match self.inferior {
+                        Some(ref mut inferior) => {
+                            inferior.kill();
+                            self.inferior = None;
+                        }
+                        None => {}
+                    }
                     if let Some(inferior) = Inferior::new(&self.target, &args) {
                         // Create the inferior
                         self.inferior = Some(inferior);
@@ -53,7 +60,33 @@ impl Debugger {
                         println!("Error starting subprocess");
                     }
                 }
+                DebuggerCommand::Continue => match self.inferior {
+                    Some(ref mut inferior) => match inferior._continue(None) {
+                        Ok(Status::Exited(exit_code)) => {
+                            println!("Exited with code {}", exit_code);
+                        }
+                        Ok(Status::Signaled(signal)) => {
+                            println!("Exited due to signal {}", signal);
+                        }
+                        Ok(Status::Stopped(signal, pc)) => {
+                            println!("Stopped due to signal {} at pc 0x{:x}", signal, pc);
+                        }
+                        Err(_) => {
+                            println!("No inferior to continue");
+                        }
+                    },
+                    None => {
+                        println!("No inferior to continue");
+                    }
+                },
                 DebuggerCommand::Quit => {
+                    match self.inferior {
+                        Some(ref mut inferior) => {
+                            inferior.kill();
+                            self.inferior = None;
+                        }
+                        None => {}
+                    }
                     return;
                 }
             }
