@@ -1,15 +1,17 @@
 use crate::debugger_command::DebuggerCommand;
+use crate::dwarf_data::{DwarfData, Error as DwarfError};
 use crate::inferior::Inferior;
+use crate::inferior::Status;
 use rustyline::error::ReadlineError;
 use rustyline::Editor;
-use crate::inferior::Status;
-use crate::dwarf_data::{DwarfData, Error as DwarfError};
+use std::collections::HashMap;
 pub struct Debugger {
     target: String,
     history_path: String,
     readline: Editor<()>,
     inferior: Option<Inferior>,
     debug_data: DwarfData,
+    breakpoints: HashMap<usize, u8>,
 }
 
 impl Debugger {
@@ -31,16 +33,25 @@ impl Debugger {
         let mut readline = Editor::<()>::new();
         // Attempt to load history from ~/.deet_history if it exists
         let _ = readline.load_history(&history_path);
-
+        let breakpoints = HashMap::new();
+        debug_data.print();
         Debugger {
             target: target.to_string(),
             history_path,
             readline,
             inferior: None,
             debug_data: debug_data,
+            breakpoints: breakpoints,
         }
     }
-
+    pub fn parse_address(addr: &str) -> Option<usize> {
+        let addr_without_0x = if addr.to_lowercase().starts_with("0x") {
+            &addr[2..]
+        } else {
+            &addr
+        };
+        usize::from_str_radix(addr_without_0x, 16).ok()
+    }
     pub fn run(&mut self) {
         loop {
             match self.get_next_command() {
@@ -65,8 +76,13 @@ impl Debugger {
                             Status::Signaled(signal) => {
                                 println!("Exited due to signal {}", signal);
                             }
-                            Status::Stopped(signal, pc) => {
-                                println!("Stopped due to signal {} at pc 0x{:x}", signal, pc);
+                            Status::Stopped(signal, rip) => {
+                                println!("Child stopped (signal {})", signal);
+                                let _line = self.debug_data.get_line_from_addr(rip);
+                                let _func = self.debug_data.get_function_from_addr(rip);
+                                if _line.is_some() && _func.is_some() {
+                                    println!("Stopped at {} ({})", _func.unwrap(), _line.unwrap());
+                                }
                             }
                         }
                     } else {
@@ -105,6 +121,58 @@ impl Debugger {
                             .unwrap();
                     }
                 }
+                DebuggerCommand::Breakpoint(location) => {
+                    let breakpoint_addr;
+                    if location.starts_with("*") {
+                        if let Some(address) = Debugger::parse_address(&location[1..]) {
+                            breakpoint_addr = address;
+                        } else {
+                            println!("Invalid address");
+                            continue;
+                        }
+                    } else if let Some(line) = usize::from_str_radix(&location, 10).ok() {
+                        if let Some(address) = self.debug_data.get_addr_for_line(None, line) {
+                            breakpoint_addr = address;
+                        } else {
+                            println!("Invalid line number");
+                            continue;
+                        }
+                    } else if let Some(address) =
+                        self.debug_data.get_addr_for_function(None, &location)
+                    {
+                        breakpoint_addr = address;
+                    } else {
+                        println!("Usage: b|break|breakpoint *address|line|func");
+                        continue;
+                    }
+
+                    if self.inferior.is_some() {
+                        if let Some(instruction) = self
+                            .inferior
+                            .as_mut()
+                            .unwrap()
+                            .write_byte(breakpoint_addr, 0xcc)
+                            .ok()
+                        {
+                            println!(
+                                "Set breakpoint {} at {:#x}",
+                                self.breakpoints.len(),
+                                breakpoint_addr
+                            );
+                            self.breakpoints.insert(breakpoint_addr, instruction);
+                        } else {
+                            println!("Invalid breakpoint address {:#x}", breakpoint_addr);
+                        }
+                    } else {
+                        // when the inferior is initiated, these breakpoints will be installed
+                        println!(
+                            "Set breakpoint {} at {:#x}",
+                            self.breakpoints.len(),
+                            breakpoint_addr
+                        );
+                        self.breakpoints.insert(breakpoint_addr, 0);
+                    }
+                }
                 DebuggerCommand::Quit => {
                     match self.inferior {
                         Some(ref mut inferior) => {
@@ -122,7 +190,7 @@ impl Debugger {
     /// This function prompts the user to enter a command, and continues re-prompting until the user
     /// enters a valid command. It uses DebuggerCommand::from_tokens to do the command parsing.
     ///
-    /// You don't need to read, understand, or modify this function.
+    /// You don't need to read, understand, or modify this function.    
     fn get_next_command(&mut self) -> DebuggerCommand {
         loop {
             // Print prompt and get next line of user input
