@@ -2,9 +2,10 @@ use nix::sys::ptrace;
 use nix::sys::signal;
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::Pid;
-use std::os::unix::prelude::CommandExt;
 use std::process::Child;
 use std::process::Command;
+use std::os::unix::process::CommandExt;
+use crate::dwarf_data::DwarfData;
 pub enum Status {
     /// Indicates inferior stopped. Contains the signal that stopped the process, as well as the
     /// current instruction pointer that it is stopped at.
@@ -67,6 +68,32 @@ impl Inferior {
             }
             other => panic!("waitpid returned unexpected status: {:?}", other),
         })
+    }
+    // BackTrace
+    pub fn print_backtrace(&self, debug_data: &DwarfData) -> Result<(), nix::Error> {
+        let regs = ptrace::getregs(self.pid())?;
+        let mut rip = regs.rip as usize;
+        let mut rbp = regs.rbp as usize;
+        loop {
+            let _line = debug_data.get_line_from_addr(rip);
+            let _func = debug_data.get_function_from_addr(rip);
+            match (&_line, &_func) {
+                (None, None) => println!("unknown func (source file not found)"),
+                (Some(line), None) => println!("unknown func ({})", line),
+                (None, Some(func)) => println!("{} (source file not found)", func),
+                (Some(line), Some(func)) => println!("{} ({})", func, line),
+            }
+            if let Some(func) = _func {
+                if func == "main" {
+                    break;
+                }
+            } else {
+                break;
+            }
+            rip = ptrace::read(self.pid(), (rbp + 8) as ptrace::AddressType)? as usize;
+            rbp = ptrace::read(self.pid(), rbp as ptrace::AddressType)? as usize;
+        }
+        Ok(())
     }
     pub fn kill(&mut self) {
         match self.child.kill() {
