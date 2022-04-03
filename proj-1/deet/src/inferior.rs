@@ -3,6 +3,7 @@ use nix::sys::ptrace;
 use nix::sys::signal;
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::Pid;
+use std::collections::HashMap;
 use std::mem::size_of;
 use std::os::unix::process::CommandExt;
 use std::process::Child;
@@ -39,20 +40,30 @@ pub struct Inferior {
 impl Inferior {
     /// Attempts to start a new inferior process. Returns Some(Inferior) if successful, or None if
     /// an error is encountered.
-    pub fn new(target: &str, args: &Vec<String>) -> Option<Inferior> {
+    pub fn new(
+        target: &str,
+        args: &Vec<String>,
+        breakpoints: &mut HashMap<usize, u8>,
+    ) -> Option<Inferior> {
         // TODO: implement me!
-        // println!(
-        //     "Inferior::new not implemented! target={}, args={:?}",
-        //     target, args
-        // );
-        // None
         let mut cmd = Command::new(target);
         cmd.args(args);
         unsafe {
             cmd.pre_exec(child_traceme);
         }
         let child = cmd.spawn().ok()?;
-        Some(Inferior { child: child })
+        let mut inferior = Inferior { child: child };
+        // install breakpoints
+        let bps = breakpoints.clone();
+        for bp in bps.keys() {
+            match inferior.write_byte(*bp, 0xcc) {
+                Ok(ori_instr) => {
+                    breakpoints.insert(*bp, ori_instr);
+                }
+                Err(_) => println!("Invalid breakpoint address {:#x}", bp),
+            }
+        }
+        Some(inferior)
     }
 
     /// Returns the pid of this inferior.
@@ -108,8 +119,36 @@ impl Inferior {
             Err(_) => {}
         }
     }
-    pub fn _continue(&mut self, signal: Option<signal::Signal>) -> Result<Status, nix::Error> {
+    pub fn _continue(
+        &mut self,
+        signal: Option<signal::Signal>,
+        breakpoints: &HashMap<usize, u8>,
+    ) -> Result<Status, nix::Error> {
+        let mut regs = ptrace::getregs(self.pid())?;
+        let rip = regs.rip as usize;
+        // check if inferior stopped at a breakpoint
+        if let Some(ori_instr) = breakpoints.get(&(rip - 1)) {
+            println!("stopped at a breakpoint");
+            // restore the first byte of the instruction we replaced
+            self.write_byte(rip - 1, *ori_instr).unwrap();
+            // set %rip = %rip - 1 to rewind the instruction pointer
+            regs.rip = (rip - 1) as u64;
+            ptrace::setregs(self.pid(), regs).unwrap();
+            // go to the next instruction
+            ptrace::step(self.pid(), None).unwrap();
+            // wait for inferior to stop due to SIGTRAP, just return if the inferior terminates here
+            match self.wait(None).unwrap() {
+                Status::Exited(exit_code) => return Ok(Status::Exited(exit_code)),
+                Status::Signaled(signal) => return Ok(Status::Signaled(signal)),
+                Status::Stopped(_, _) => {
+                    // restore 0xcc in the breakpoint location
+                    self.write_byte(rip - 1, 0xcc).unwrap();
+                }
+            }
+        }
+        // resume normal execution
         ptrace::cont(self.pid(), signal)?;
+        // wait for inferior to stop or terminate
         self.wait(None)
     }
 

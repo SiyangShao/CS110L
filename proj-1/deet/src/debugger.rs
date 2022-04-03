@@ -63,13 +63,19 @@ impl Debugger {
                         }
                         None => {}
                     }
-                    if let Some(inferior) = Inferior::new(&self.target, &args) {
+                    if let Some(inferior) = Inferior::new(&self.target, &args, &mut self.breakpoints) {
                         // Create the inferior
                         self.inferior = Some(inferior);
                         // TODO (milestone 1): make the inferior run
                         // You may use self.inferior.as_mut().unwrap() to get a mutable reference
                         // to the Inferior object
-                        match self.inferior.as_mut().unwrap()._continue(None).unwrap() {
+                        match self
+                            .inferior
+                            .as_mut()
+                            .unwrap()
+                            ._continue(None, &self.breakpoints)
+                            .unwrap()
+                        {
                             Status::Exited(exit_code) => {
                                 println!("Exited with code {}", exit_code);
                             }
@@ -89,25 +95,38 @@ impl Debugger {
                         println!("Error starting subprocess");
                     }
                 }
-                DebuggerCommand::Continue => match self.inferior {
-                    Some(ref mut inferior) => match inferior._continue(None) {
-                        Ok(Status::Exited(exit_code)) => {
-                            println!("Exited with code {}", exit_code);
+                DebuggerCommand::Continue => {
+                    if self.inferior.is_none() {
+                        println!(
+                            "Error: you can not use continue when there is no process running!"
+                        );
+                    } else {
+                        match self
+                            .inferior
+                            .as_mut()
+                            .unwrap()
+                            ._continue(None, &self.breakpoints)
+                            .unwrap()
+                        {
+                            Status::Exited(exit_code) => {
+                                println!("Child exited (status {})", exit_code);
+                                self.inferior = None;
+                            }
+                            Status::Signaled(signal) => {
+                                println!("Child exited due to signal {}", signal);
+                                self.inferior = None;
+                            }
+                            Status::Stopped(signal, rip) => {
+                                println!("Child stopped (signal {})", signal);
+                                let _line = self.debug_data.get_line_from_addr(rip);
+                                let _func = self.debug_data.get_function_from_addr(rip);
+                                if _line.is_some() && _func.is_some() {
+                                    println!("Stopped at {} ({})", _func.unwrap(), _line.unwrap());
+                                }
+                            }
                         }
-                        Ok(Status::Signaled(signal)) => {
-                            println!("Exited due to signal {}", signal);
-                        }
-                        Ok(Status::Stopped(signal, pc)) => {
-                            println!("Stopped due to signal {} at pc 0x{:x}", signal, pc);
-                        }
-                        Err(_) => {
-                            println!("No inferior to continue");
-                        }
-                    },
-                    None => {
-                        println!("No inferior to continue");
                     }
-                },
+                }
                 DebuggerCommand::Backtrace => {
                     if self.inferior.is_none() {
                         println!(
